@@ -4,7 +4,7 @@
   Title: Address Scheme for Timelocked Fidelity Bonds
   Authors: Chris Belcher <belcher@riseup.net>
            Thebora Kompanioni <theborakompanioni+bip46@gmail.com>
-           dni <office@dnilabs.com>
+           dni <office+bip46@dnilabs.com>
   Status: Draft
   Type: Specification
   Assigned: 2022-04-01
@@ -62,13 +62,13 @@ Where the endpoint might be a IRC nickname or Tor onion hostname. The certificat
 
 It is useful for the user to avoid having to keep a record of the timelocks in the time-locked addresses. So only a limited small set of timelocks are defined by this BIP. This way the user must only store their seed phrase, and knowledge that they have coins stored using this BIP standard. The user doesn't need to remember or store any dates.
 
-v1 of this standard is already implemented and deployed in JoinMarket, using derivation path <tt>m/84'/0'/0'/2/index</tt> and the <tt>witness script</tt> <tt>&lt;timelock&gt; OP_CHECKLOCKTIMEVERIFY OP_DROP &lt;derived_key&gt; OP_CHECKSIG</tt>. As it is a protocol used by a live system, v1 itself is kept as-is and is more about documenting something which already exists, warts and all, rather than a target for further changes.
+v1 of this standard is already implemented and deployed in JoinMarket, using derivation path <tt>m/84'/0'/0'/2/index</tt> and the <tt>witness script</tt> `<timelock> OP_CHECKLOCKTIMEVERIFY OP_DROP <derived_key> OP_CHECKSIG`. As it is a protocol used by a live system, v1 itself is kept as-is and is more about documenting something which already exists, warts and all, rather than a target for further changes.
 
 Subsequent review identified two aspects of v1 worth revising for newly-created fidelity bonds, which this BIP addresses by defining v2 as an additional scheme alongside v1 rather than by changing v1 in place:
 
 v1 derives addresses under <tt>m/84'/0'/0'/2/index</tt>, reusing BIP 84's <tt>purpose</tt> field the way BIP 49 layers P2WPKH-in-P2SH accounts under BIP 44's <tt>purpose</tt>. Unlike BIP 49's case, there is no structural reason for fidelity bonds to share BIP 84's purpose: fidelity bond addresses are not P2WPKH outputs and are not interchangeable with plain BIP 84 accounts, so reusing <tt>84'</tt> only obscured which BIP a given path belongs to. Per BIP 43, each application-specific derivation scheme should register its own <tt>purpose</tt>, so v2 gives fidelity bonds their own <tt>purpose</tt> of <tt>46'</tt>, matching this BIP's number as BIP 44/49/84/86 do for theirs. A dedicated purpose field also makes it simpler for hardware wallets and other signing devices to recognize and offer explicit support for fidelity bond derivation, rather than having to special-case index ranges within their existing BIP 84 handling.
 
-v1's <tt>witness script</tt> cannot be expressed in [[bip-0379.md|Miniscript]] because Miniscript requires every script fragment to leave a clean boolean on the stack, and the <tt>OP_DROP</tt> in the middle of this template breaks that property. This meant Miniscript-aware signing devices could not recognize, display or sign for fidelity bond outputs without bespoke, non-Miniscript support. v2 reorders the template to <tt>&lt;derived_key&gt; OP_CHECKSIGVERIFY &lt;timelock&gt; OP_CHECKLOCKTIMEVERIFY</tt>, which is exactly the Miniscript fragment <tt>and_v(v:pk(K),after(T))</tt> and is functionally equivalent to v1's script (same signature and timelock check, same one-branch spending condition). A prior proposal to shrink the script by one byte was rejected as not worth a compatibility break on its own; the Miniscript compatibility benefit is the actual justification for v2's script template.
+v1's <tt>witness script</tt> cannot be expressed in [[bip-0379.md|Miniscript]] because Miniscript requires every script fragment to leave a clean boolean on the stack, and the <tt>OP_DROP</tt> in the middle of this template breaks that property. This meant Miniscript-aware signing devices could not recognize, display or sign for fidelity bond outputs without bespoke, non-Miniscript support. v2 reorders the template to `<derived_key> OP_CHECKSIGVERIFY <timelock> OP_CHECKLOCKTIMEVERIFY`, which is exactly the Miniscript fragment <tt>and_v(v:pk(K),after(T))</tt> and is functionally equivalent to v1's script (same signature and timelock check, same one-branch spending condition). A prior proposal to shrink the script by one byte was rejected as not worth a compatibility break on its own; the Miniscript compatibility benefit is the actual justification for v2's script template.
 
 v1 is retained rather than replaced because existing fidelity bonds were created under it, are already advertised as proof of sacrifice, and may still be timelocked years into the future; a wallet that dropped v1 support outright would simply stop finding those funds. Defining v2 as an additional scheme lets new bonds get the benefits above without making existing bonds unrecoverable.
 
