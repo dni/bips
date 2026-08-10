@@ -10,6 +10,7 @@
   Assigned: 2022-04-01
   License: CC0-1.0
   Discussion: 2022-05-01: https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2022-May/020389.html
+  Version: 0.2.0
 </pre>
 
 == Abstract ==
@@ -78,7 +79,7 @@ This BIP defines the two needed steps to derive multiple deterministic addresses
 
 === Public key derivation ===
 
-To derive a public key from the root account, this BIP uses a similar account-structure as defined in BIP [[bip-0044.mediawiki|44]], with <tt>change</tt> set to <tt>2</tt>. The <tt>purpose</tt> field depends on the version:
+To derive a public key from the root account, this BIP uses a similar account-structure as defined in BIP [[bip-0044.mediawiki|44]]. The <tt>purpose</tt> field and the <tt>change</tt> field both depend on the version:
 
 v1 (legacy):
 <pre>
@@ -87,10 +88,12 @@ m / 84' / 0' / 0' / 2 / index
 
 v2:
 <pre>
-m / 46' / 0' / 0' / 2 / index
+m / 46' / 0' / 0' / 0 / index
 </pre>
 
-v1 reuses BIP 84's <tt>purpose</tt> field; it is retained unchanged from the deployed JoinMarket scheme purely so existing fidelity bonds remain discoverable, see [[#rationale|Rationale]]. v2 uses its own <tt>purpose</tt> field of <tt>46'</tt>, matching this BIP's number as recommended by [[bip-0043.mediawiki|BIP 43]], and SHOULD be used for creating new fidelity bonds.
+v1 reuses BIP 84's <tt>purpose</tt> field; it is retained unchanged from the deployed JoinMarket scheme purely so existing fidelity bonds remain discoverable, see [[#rationale|Rationale]]. Because v1's <tt>account</tt> level (<tt>m/84'/0'/0'</tt>) is shared with a wallet's ordinary BIP 84 receive and change addresses, v1 sets <tt>change</tt> to <tt>2</tt>, a value BIP 44 never uses for its external (<tt>0</tt>) or internal (<tt>1</tt>) chains, so that fidelity bond addresses cannot collide with them.
+
+v2 uses its own <tt>purpose</tt> field of <tt>46'</tt>, matching this BIP's number as recommended by [[bip-0043.mediawiki|BIP 43]], and SHOULD be used for creating new fidelity bonds. Nothing else is derived under <tt>m/46'</tt>, so there is no shared account to collide with and no need for the <tt>change</tt> workaround v1 relies on; v2 uses the conventional external-chain value of <tt>0</tt> instead. This also makes v2 paths look like an ordinary BIP 44-style path to generic path-sanity checks in signing devices, rather than tripping "unusual path" warnings the way v1's <tt>2</tt> can.
 
 A key derived with either of these derivation path patterns will be referred to as <tt>derived_key</tt> further in this document; which version's path was used to derive it should be tracked alongside it, since it also determines which <tt>witness script</tt> template applies (see [[#address-derivation|Address derivation]]).
 
@@ -211,14 +214,14 @@ endpoint signature        = H18WE4MugDNoWZIf9jU0njhQptdUyBDUf7lToG9bpMKmeJK0lOoA
 
 // ==================== v2 ====================
 
-// First timelocked address = m/46'/0'/0'/2/0
-derived private_key = L3E6LgSfbA7VfHCx8AH28nH4jMitDGFS1f5qGBWK6Hbk3g7R8NVe
-derived public_key  = 0369c4e9f59d930323eebe9bc4210100fa76d34f788eaedfc7a2ace8e035842e59
+// First timelocked address = m/46'/0'/0'/0/0
+derived private_key = KxaN4YnskiixL5CrqjAN98CZ2GXatRrwtQFprAYMPysSzM2BE9Bt
+derived public_key  = 03ff137af5f9b2e31e4bc2a75210c3f594c3a0c7881561c08560f5036e6831cabb
 unix locktime       = 1577836800
 string locktime     = 2020-01-01 00:00:00
-redeemscript        = 210369c4e9f59d930323eebe9bc4210100fa76d34f788eaedfc7a2ace8e035842e59ad0400e10b5eb1
-scriptPubKey        = 0020e5b7a7ab8937750e8f994402606e83aa0cb4492d091086696c179822a5a31a18
-address             = bc1qukm602ufxa6saruegspxqm5r4gxtgjfdpyggv6tvz7vz9fdrrgvqe05ptq
+redeemscript        = 2103ff137af5f9b2e31e4bc2a75210c3f594c3a0c7881561c08560f5036e6831cabbad0400e10b5eb1
+scriptPubKey        = 00203152cc8772555c3aec6fa8a4a521723533d09da47e99ac1f2cdd6adb0e21dbc9
+address             = bc1qx9fvepmj24wr4mr04zj22gtjx5eap8dy06v6c8evm44dkr3pm0yst3mmhn
 
 // Test certificate using the first timelocked address
 // Note that as signatures contains a random nonce, it might not be exactly the same when your code generates it
@@ -226,47 +229,47 @@ address             = bc1qukm602ufxa6saruegspxqm5r4gxtgjfdpyggv6tvz7vz9fdrrgvqe0
 //  signature in any wallet that supports Verify Message.
 // As mentioned before, it is more important for implementers of this standard to support signing such messages, not verifying them
 message       = fidelity-bond-cert|020000000000000000000000000000000000000000000000000000000000000001|375
-address       = bc1qukm602ufxa6saruegspxqm5r4gxtgjfdpyggv6tvz7vz9fdrrgvqe05ptq
-p2pkh address = 1MDLP6P1r21u69hprueR5pGDW21vrWrrW1
-signature     = HwGzZOH9SluGJZ99H/K8l15WfofOhhuBxD6vw28qiP/SQJD0DQhnkGmTqEjsEuqR4/qwDRxjoJgVHuSZ4N+BWmo=
+address       = bc1qx9fvepmj24wr4mr04zj22gtjx5eap8dy06v6c8evm44dkr3pm0yst3mmhn
+p2pkh address = 17KGrfRcvDihzVTwBGP9CdmEMsncFsAHF2
+signature     = H+ZQ9PqJFaUgkYx77cYCyO7pMrNUMTNsm98lApLzgLZxfjhCmmVMSJ0MiEo0UzE1tNpf+HGlXrDgtgxGvCcMgds=
 
-// 2nd timelocked address = m/46'/0'/0'/2/1
-derived private_key = L32tGdBaL48Po6p17asTQh9a4XoBJWZbDMJfceV88Rsai8i2R1fD
-derived public_key  = 03b0a9c221a88eca1456b6eb5c1406f8268b3790dd20c2fa57805a3e66bbd1b7e3
+// 2nd timelocked address = m/46'/0'/0'/0/1
+derived private_key = KyfxXF38c6qdQ6q1XQsH3iZYuTrLUxd1h6QE2m5PdxC4jg4PyBKc
+derived public_key  = 026c5f060538651b68ca3728a546c8e716abd1098da946adcf8e9fbdc3144a014c
 unix locktime       = 1580515200
 string locktime     = 2020-02-01 00:00:00
-redeemscript        = 2103b0a9c221a88eca1456b6eb5c1406f8268b3790dd20c2fa57805a3e66bbd1b7e3ad0480bf345eb1
-scriptPubKey        = 002098852a04080830795e1df01f7e37b86167741578cc7e3e9fd24c39a1d11b5733
-address             = bc1qnzzj5pqgpqc8jhsa7q0hudacv9nhg9tce3lra87jfsu6r5gm2ues0xtufm
+redeemscript        = 21026c5f060538651b68ca3728a546c8e716abd1098da946adcf8e9fbdc3144a014cad0480bf345eb1
+scriptPubKey        = 0020c70a46a43eea9f79bdd2e0e37596cb76492694fc9ada0b3d35a512a1c69d88b7
+address             = bc1qcu9ydfp7a20hn0wjur3ht9ktweyjd98untdqk0f455f2r35a3zmsjscddw
 
-// timelocked address after the year 2038 = m/46'/0'/0'/2/240
-derived private_key = KyLCWyip5EgFs8TGRUPk7uZMpM5YFJMu1P4sp5ShJRhaKm6riyAx
-derived public_key  = 03448abf89d3a1fe807cdff51c0e21319a5441cbd0135021d0728eae36d01689a2
+// timelocked address after the year 2038 = m/46'/0'/0'/0/240
+derived private_key = L1SmJhfSKCJej1WEiX6UHp29Yxs8QTq8CK97nBa8Y9rw9zNMnHnU
+derived public_key  = 0276fee1867894e8c7007c840a535bf9caff961c6e77b96739b23fa0b19a1d4573
 unix locktime       = 2208988800
 string locktime     = 2040-01-01 00:00:00
-redeemscript        = 2103448abf89d3a1fe807cdff51c0e21319a5441cbd0135021d0728eae36d01689a2ad05807eaa8300b1
-scriptPubKey        = 00205056a8ba7f2a713820dcfc403431df2fba1220c58336ed3a3f7e98c273eb8457
-address             = bc1q2pt23wnl9fcnsgxul3qrgvwl97apygx9svmw6w3l06vvyults3tsctskjv
+redeemscript        = 210276fee1867894e8c7007c840a535bf9caff961c6e77b96739b23fa0b19a1d4573ad05807eaa8300b1
+scriptPubKey        = 0020b4d828d1c484d4e1bf74e4992525f5df01ea93a686fd06aeda7dc592abc54254
+address             = bc1qknvz35wysn2wr0m5ujvj2f04muq74yaxsm7sdtk60hze9279gf2q4wxcw5
 
-// last timelocked address = m/46'/0'/0'/2/959
-derived private_key = L5PAnHKx16vuVXTKadrQQyhnigp1f5XkVT58nxcAYpqbZUdKW9fk
-derived public_key  = 035d1de7520197a13861f111edfd317738dd514499e9d59c963ad5db632d82cdbe
+// last timelocked address = m/46'/0'/0'/0/959
+derived private_key = L1z276EvF9mN1c46aDGFLhQnGBosLKgNn5gRMDggbQfvsdaXugoD
+derived public_key  = 03fe8c13f33af5d30d450acc2845e9982dbe37a667f190e68edb2b9bb7dd50232d
 unix locktime       = 4099766400
 string locktime     = 2099-12-01 00:00:00
-redeemscript        = 21035d1de7520197a13861f111edfd317738dd514499e9d59c963ad5db632d82cdbead0580785df400b1
-scriptPubKey        = 002069bd777269abf22ec454e0ef7825207515368a2d2bb922a8f27a4a71c2be9fb8
-address             = bc1qdx7hwunf40eza3z5urhhsffqw52ndz3d9wuj928j0f98rs47n7uq58akau
+redeemscript        = 2103fe8c13f33af5d30d450acc2845e9982dbe37a667f190e68edb2b9bb7dd50232dad0580785df400b1
+scriptPubKey        = 0020ed6e438650f1adac1d060573507f004672979edae4ba55e565d99347f0a97df5
+address             = bc1qa4hy8pjs7xk6c8gxq4e4qlcqgeef08k6uja9tet9mxf50u9f0h6sk0twmp
 
-// Test certificate and endpoint signing using the first timelocked address = m/46'/0'/0'/2/0 (see above)
-bond private_key          = L3E6LgSfbA7VfHCx8AH28nH4jMitDGFS1f5qGBWK6Hbk3g7R8NVe
-bond p2pkh address        = 1MDLP6P1r21u69hprueR5pGDW21vrWrrW1
+// Test certificate and endpoint signing using the first timelocked address = m/46'/0'/0'/0/0 (see above)
+bond private_key          = KxaN4YnskiixL5CrqjAN98CZ2GXatRrwtQFprAYMPysSzM2BE9Bt
+bond p2pkh address        = 17KGrfRcvDihzVTwBGP9CdmEMsncFsAHF2
 
 certificate private_key   = KyZpNDKnfs94vbrwhJneDi77V6jF64PWPF8x5cdJb8ifgg2DUc9d
 certificate public_key    = 0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c
 certificate p2pkh address = 1JaUQDVNRdhfNsVncGkXedaPSM5Gc54Hso
 
 certificate message       = fidelity-bond-cert|0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c|375
-certificate signature     = H3cYEWxRT6dvJnliu9GkZmb7veDOeZBxBIKUHhbB8i/FAA3s6+Q3GT3GHdaFDo3Fnn3ZkuvmDSgczB8Ea+eiyH0=
+certificate signature     = IJxGwHOKrwUjTuRi0UVDYbh0Kbex9d8yR/x1KBe5rvCDVBohP0YC4R/p/x7vp/cGOm+/+jsxz121yJ7PGf+4EQ0=
 
 // example endpoint signing two IRC nicknames (used in JoinMarket)
 // note the endpoint signature is identical to the v1 vectors above: the certificate keypair is
@@ -289,3 +292,12 @@ Code generating the v1 test vectors can be found here: https://github.com/chris-
 * [[bip-0084.mediawiki|BIP84 - Derivation scheme for P2WPKH based accounts]]
 * [[bip-0086.mediawiki|BIP86 - Key Derivation for Single Key P2TR Outputs]]
 * [[bip-0379.md|BIP379 - Miniscript]]
+
+== Changelog ==
+
+To help implementers understand updates to this document, a version number resembling ''semantic versioning'' (<tt>MAJOR.MINOR.PATCH</tt>) is used, as described in [[bip-0003.md|BIP 3]]. The <tt>MAJOR</tt> version is incremented for changes incompatible with prior versions, <tt>MINOR</tt> for backward-compatible additions or extensions, and <tt>PATCH</tt> for other noteworthy changes (bug fixes, test vectors, clarifications, etc.). This BIP has not yet reached Complete status, so its version stays below 1.0.0.
+
+* '''0.2.0''' (2026-08-10):
+** Add a v2 derivation scheme with a dedicated <tt>purpose'</tt> field (<tt>m/46'</tt>), <tt>change</tt> set to the conventional external-chain value <tt>0</tt> (<tt>m/46'/0'/0'/0/index</tt>), and a Miniscript-compatible <tt>witness script</tt>, alongside the existing v1 scheme (<tt>m/84'/0'/0'/2/index</tt>); add corresponding test vectors and update Rationale and Backwards Compatibility accordingly.
+* '''0.1.0''' (2024-05-23):
+** Initial version, merged as BIP-46.
