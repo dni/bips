@@ -4,6 +4,7 @@
   Title: Address Scheme for Timelocked Fidelity Bonds
   Authors: Chris Belcher <belcher@riseup.net>
            Thebora Kompanioni <theborakompanioni+bip46@gmail.com>
+           dni <office@dnilabs.com>
   Status: Draft
   Type: Specification
   Assigned: 2022-04-01
@@ -15,6 +16,8 @@
 
 This BIP defines the derivation scheme for HD wallets which create timelocked addresses used for creating fidelity bonds. It also gives advice to wallet developers on how to use fidelity bonds to sign over messages, such as certificates, which are needed when using fidelity bonds that are stored offline.
 
+Two versions of the scheme are defined: v1, the original scheme already deployed in JoinMarket, and v2, a revision using a dedicated derivation <tt>purpose</tt> and a Miniscript-compatible <tt>witness script</tt>. Wallets SHOULD create new fidelity bonds using v2, and SHOULD also recognize v1 fidelity bonds that already exist.
+
 == Copyright ==
 
 This document is licensed under the Creative Commons CC0 1.0 Universal license.
@@ -25,13 +28,17 @@ Fidelity bonds are used to resist sybil attacks in certain decentralized anonymo
 
 Having a common derivation scheme allows users of wallet software to have a backup of their fidelity bonds by storing only the HD seed and a reference to this BIP. Importantly the user does not need to backup any timelock values.
 
-We largely use the same approach used in BIPs 49, 84 and 86 for ease of implementation.
+We largely use the same account-structure approach used in BIPs 44, 49, 84 and 86 for ease of implementation.
 
 This allows keeping the private keys of fidelity bonds in cold storage, which increases the sybil resistance of a system without hot wallet risk.
 
 == Backwards Compatibility ==
 
-This BIP is not backwards compatible by design as described in the Considerations section of [[bip-0049.mediawiki|BIP 49]]. An incompatible wallet will not discover fidelity bonds at all and the user will notice that something is wrong.
+This BIP is not backwards compatible with generic wallets by design, as described in the Considerations section of [[bip-0049.mediawiki|BIP 49]]. A wallet that does not implement this BIP at all will not discover fidelity bonds and the user will notice that something is wrong.
+
+Within this BIP, v1 and v2 use different <tt>purpose</tt> fields and different <tt>witness script</tt> templates (see [[#public-key-derivation|Public key derivation]] and [[#address-derivation|Address derivation]]), so they occupy disjoint parts of the derivation tree and neither collides with nor overwrites the other. This lets an implementation support both at once: v1 is kept in the spec, unchanged from the deployed JoinMarket scheme, purely so that software can still find and spend fidelity bonds created before v2 existed. v2 is the scheme new fidelity bonds should be created under, since it gives fidelity bonds their own <tt>purpose</tt> and uses a <tt>witness script</tt> that Miniscript-aware signing devices can parse.
+
+A wallet implementing only v1 will not discover v2 fidelity bonds, and a wallet implementing only v2 will not discover v1 fidelity bonds created by earlier software. Wallets SHOULD implement both: generate and check v2 addresses for new fidelity bonds, and additionally scan v1 addresses so that funds already locked up under the original scheme remain discoverable until they are spent or expire.
 
 == Background ==
 
@@ -55,7 +62,15 @@ Where the endpoint might be a IRC nickname or Tor onion hostname. The certificat
 
 It is useful for the user to avoid having to keep a record of the timelocks in the time-locked addresses. So only a limited small set of timelocks are defined by this BIP. This way the user must only store their seed phrase, and knowledge that they have coins stored using this BIP standard. The user doesn't need to remember or store any dates.
 
-This standard is already implemented and deployed in JoinMarket. As most changes would require a protocol change of a live system, there is limited scope for changing this standard in review. This BIP is more about documenting something which already exists, warts and all.
+v1 of this standard is already implemented and deployed in JoinMarket, using derivation path <tt>m/84'/0'/0'/2/index</tt> and the <tt>witness script</tt> <tt>&lt;timelock&gt; OP_CHECKLOCKTIMEVERIFY OP_DROP &lt;derived_key&gt; OP_CHECKSIG</tt>. As it is a protocol used by a live system, v1 itself is kept as-is and is more about documenting something which already exists, warts and all, rather than a target for further changes.
+
+Subsequent review identified two aspects of v1 worth revising for newly-created fidelity bonds, which this BIP addresses by defining v2 as an additional scheme alongside v1 rather than by changing v1 in place:
+
+v1 derives addresses under <tt>m/84'/0'/0'/2/index</tt>, reusing BIP 84's <tt>purpose</tt> field the way BIP 49 layers P2WPKH-in-P2SH accounts under BIP 44's <tt>purpose</tt>. Unlike BIP 49's case, there is no structural reason for fidelity bonds to share BIP 84's purpose: fidelity bond addresses are not P2WPKH outputs and are not interchangeable with plain BIP 84 accounts, so reusing <tt>84'</tt> only obscured which BIP a given path belongs to. Per BIP 43, each application-specific derivation scheme should register its own <tt>purpose</tt>, so v2 gives fidelity bonds their own <tt>purpose</tt> of <tt>46'</tt>, matching this BIP's number as BIP 44/49/84/86 do for theirs. A dedicated purpose field also makes it simpler for hardware wallets and other signing devices to recognize and offer explicit support for fidelity bond derivation, rather than having to special-case index ranges within their existing BIP 84 handling.
+
+v1's <tt>witness script</tt> cannot be expressed in [[bip-0379.md|Miniscript]] because Miniscript requires every script fragment to leave a clean boolean on the stack, and the <tt>OP_DROP</tt> in the middle of this template breaks that property. This meant Miniscript-aware signing devices could not recognize, display or sign for fidelity bond outputs without bespoke, non-Miniscript support. v2 reorders the template to <tt>&lt;derived_key&gt; OP_CHECKSIGVERIFY &lt;timelock&gt; OP_CHECKLOCKTIMEVERIFY</tt>, which is exactly the Miniscript fragment <tt>and_v(v:pk(K),after(T))</tt> and is functionally equivalent to v1's script (same signature and timelock check, same one-branch spending condition). A prior proposal to shrink the script by one byte was rejected as not worth a compatibility break on its own; the Miniscript compatibility benefit is the actual justification for v2's script template.
+
+v1 is retained rather than replaced because existing fidelity bonds were created under it, are already advertised as proof of sacrifice, and may still be timelocked years into the future; a wallet that dropped v1 support outright would simply stop finding those funds. Defining v2 as an additional scheme lets new bonds get the benefits above without making existing bonds unrecoverable.
 
 == Specifications ==
 
@@ -63,16 +78,23 @@ This BIP defines the two needed steps to derive multiple deterministic addresses
 
 === Public key derivation ===
 
-To derive a public key from the root account, this BIP uses a similar account-structure as defined in BIP [[bip-0084.mediawiki|44]] but with <tt>change</tt> set to <tt>2</tt>.
+To derive a public key from the root account, this BIP uses a similar account-structure as defined in BIP [[bip-0044.mediawiki|44]], with <tt>change</tt> set to <tt>2</tt>. The <tt>purpose</tt> field depends on the version:
 
+v1 (legacy):
 <pre>
 m / 84' / 0' / 0' / 2 / index
 </pre>
 
-A key derived with this derivation path pattern will be referred to as <tt>derived_key</tt> further
-in this document.
+v2:
+<pre>
+m / 46' / 0' / 0' / 2 / index
+</pre>
 
-For <tt>index</tt>, addresses are numbered from 0 in a sequentially increasing manner with a fixed upper bound: The index only goes up to <tt>959</tt> inclusive. Only 960 addresses can be derived for a given BIP32 master key. Furthermore there is no concept of a gap limit, instead wallets must always generate all 960 addresses and check for all of them if they have a balance and history.
+v1 reuses BIP 84's <tt>purpose</tt> field; it is retained unchanged from the deployed JoinMarket scheme purely so existing fidelity bonds remain discoverable, see [[#rationale|Rationale]]. v2 uses its own <tt>purpose</tt> field of <tt>46'</tt>, matching this BIP's number as recommended by [[bip-0043.mediawiki|BIP 43]], and SHOULD be used for creating new fidelity bonds.
+
+A key derived with either of these derivation path patterns will be referred to as <tt>derived_key</tt> further in this document; which version's path was used to derive it should be tracked alongside it, since it also determines which <tt>witness script</tt> template applies (see [[#address-derivation|Address derivation]]).
+
+For <tt>index</tt>, addresses are numbered from 0 in a sequentially increasing manner with a fixed upper bound: The index only goes up to <tt>959</tt> inclusive. Only 960 addresses can be derived per version for a given BIP32 master key. Furthermore there is no concept of a gap limit, instead wallets must always generate all 960 addresses of a version and check for all of them if they have a balance and history.
 
 === Timelock derivation ===
 
@@ -86,13 +108,21 @@ month = 1 + index % 12
 
 === Address derivation ===
 
-To derive the address from the above calculated public key and timelock, we create a <tt>witness script</tt> which locks the funds until the <tt>timelock</tt>, and then checks the signature of the <tt>derived_key</tt>. The <tt>witness script</tt> is hashed with SHA256 to produce a 32-byte hash value that forms the <tt>witness program</tt> in the output script of the P2WSH address.
+To derive the address from the above calculated public key and timelock, we create a <tt>witness script</tt> which locks the funds until the <tt>timelock</tt> and checks the signature of the <tt>derived_key</tt>. The <tt>witness script</tt> is hashed with SHA256 to produce a 32-byte hash value that forms the <tt>witness program</tt> in the output script of the P2WSH address. The template used depends on the version of the <tt>derived_key</tt>:
 
+v1 (legacy):
     witnessScript: <timelock> OP_CHECKLOCKTIMEVERIFY OP_DROP <derived_key> OP_CHECKSIG
+
+v2:
+    witnessScript: <derived_key> OP_CHECKSIGVERIFY <timelock> OP_CHECKLOCKTIMEVERIFY
+
+For both versions:
     witness:      <signature> <witnessScript>
     scriptSig:    (empty)
     scriptPubKey: 0 <32-byte-hash>
                   (0x0020{32-byte-hash})
+
+The v2 template is written <tt>and_v(v:pk(K),after(T))</tt> in [[bip-0379.md|Miniscript]] notation, where <tt>K</tt> is <tt>derived_key</tt> and <tt>T</tt> is <tt>timelock</tt>. Unlike the v1 template, it is directly expressible in Miniscript, letting Miniscript-aware signing devices recognize, display and sign for v2 fidelity bond outputs without bespoke policy support. The v1 template is not expressible in Miniscript; see [[#rationale|Rationale]].
 
 === Message signing ===
 
@@ -115,6 +145,8 @@ It is most important for wallet implementations of this standard to support crea
 mnemonic = abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
 rootpriv = xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu
 rootpub  = xpub661MyMwAqRbcFkPHucMnrGNzDwb6teAX1RbKQmqtEF8kK3Z7LZ59qafCjB9eCRLiTVG3uxBxgKvRgbubRhqSKXnGGb1aoaqLrpMBDrVxga8
+
+// ==================== v1 (legacy) ====================
 
 // First timelocked address = m/84'/0'/0'/2/0
 derived private_key = L2tQBEdhC48YLeEWNg3e4msk94iKfyVa9hdfzRwUERabZ53TfH3d
@@ -176,9 +208,74 @@ certificate signature     = INOP3cB9UW7F1e1Aglj8rI9QhnyxmgWDEPt+nOMvl7hJJne7rH/K
 // example endpoint signing two IRC nicknames (used in JoinMarket)
 endpoint message          = J54LS6YyJPoseqFS|J55VZ6U6ZyFDNeuv
 endpoint signature        = H18WE4MugDNoWZIf9jU0njhQptdUyBDUf7lToG9bpMKmeJK0lOoABaDs5bKnohSuZ0e9gnSco5OL9lXdKU7gP5E=
+
+// ==================== v2 ====================
+
+// First timelocked address = m/46'/0'/0'/2/0
+derived private_key = L3E6LgSfbA7VfHCx8AH28nH4jMitDGFS1f5qGBWK6Hbk3g7R8NVe
+derived public_key  = 0369c4e9f59d930323eebe9bc4210100fa76d34f788eaedfc7a2ace8e035842e59
+unix locktime       = 1577836800
+string locktime     = 2020-01-01 00:00:00
+redeemscript        = 210369c4e9f59d930323eebe9bc4210100fa76d34f788eaedfc7a2ace8e035842e59ad0400e10b5eb1
+scriptPubKey        = 0020e5b7a7ab8937750e8f994402606e83aa0cb4492d091086696c179822a5a31a18
+address             = bc1qukm602ufxa6saruegspxqm5r4gxtgjfdpyggv6tvz7vz9fdrrgvqe05ptq
+
+// Test certificate using the first timelocked address
+// Note that as signatures contains a random nonce, it might not be exactly the same when your code generates it
+// p2pkh address is the p2pkh address corresponding to the derived public key, it can be used to verify the message
+//  signature in any wallet that supports Verify Message.
+// As mentioned before, it is more important for implementers of this standard to support signing such messages, not verifying them
+message       = fidelity-bond-cert|020000000000000000000000000000000000000000000000000000000000000001|375
+address       = bc1qukm602ufxa6saruegspxqm5r4gxtgjfdpyggv6tvz7vz9fdrrgvqe05ptq
+p2pkh address = 1MDLP6P1r21u69hprueR5pGDW21vrWrrW1
+signature     = HwGzZOH9SluGJZ99H/K8l15WfofOhhuBxD6vw28qiP/SQJD0DQhnkGmTqEjsEuqR4/qwDRxjoJgVHuSZ4N+BWmo=
+
+// 2nd timelocked address = m/46'/0'/0'/2/1
+derived private_key = L32tGdBaL48Po6p17asTQh9a4XoBJWZbDMJfceV88Rsai8i2R1fD
+derived public_key  = 03b0a9c221a88eca1456b6eb5c1406f8268b3790dd20c2fa57805a3e66bbd1b7e3
+unix locktime       = 1580515200
+string locktime     = 2020-02-01 00:00:00
+redeemscript        = 2103b0a9c221a88eca1456b6eb5c1406f8268b3790dd20c2fa57805a3e66bbd1b7e3ad0480bf345eb1
+scriptPubKey        = 002098852a04080830795e1df01f7e37b86167741578cc7e3e9fd24c39a1d11b5733
+address             = bc1qnzzj5pqgpqc8jhsa7q0hudacv9nhg9tce3lra87jfsu6r5gm2ues0xtufm
+
+// timelocked address after the year 2038 = m/46'/0'/0'/2/240
+derived private_key = KyLCWyip5EgFs8TGRUPk7uZMpM5YFJMu1P4sp5ShJRhaKm6riyAx
+derived public_key  = 03448abf89d3a1fe807cdff51c0e21319a5441cbd0135021d0728eae36d01689a2
+unix locktime       = 2208988800
+string locktime     = 2040-01-01 00:00:00
+redeemscript        = 2103448abf89d3a1fe807cdff51c0e21319a5441cbd0135021d0728eae36d01689a2ad05807eaa8300b1
+scriptPubKey        = 00205056a8ba7f2a713820dcfc403431df2fba1220c58336ed3a3f7e98c273eb8457
+address             = bc1q2pt23wnl9fcnsgxul3qrgvwl97apygx9svmw6w3l06vvyults3tsctskjv
+
+// last timelocked address = m/46'/0'/0'/2/959
+derived private_key = L5PAnHKx16vuVXTKadrQQyhnigp1f5XkVT58nxcAYpqbZUdKW9fk
+derived public_key  = 035d1de7520197a13861f111edfd317738dd514499e9d59c963ad5db632d82cdbe
+unix locktime       = 4099766400
+string locktime     = 2099-12-01 00:00:00
+redeemscript        = 21035d1de7520197a13861f111edfd317738dd514499e9d59c963ad5db632d82cdbead0580785df400b1
+scriptPubKey        = 002069bd777269abf22ec454e0ef7825207515368a2d2bb922a8f27a4a71c2be9fb8
+address             = bc1qdx7hwunf40eza3z5urhhsffqw52ndz3d9wuj928j0f98rs47n7uq58akau
+
+// Test certificate and endpoint signing using the first timelocked address = m/46'/0'/0'/2/0 (see above)
+bond private_key          = L3E6LgSfbA7VfHCx8AH28nH4jMitDGFS1f5qGBWK6Hbk3g7R8NVe
+bond p2pkh address        = 1MDLP6P1r21u69hprueR5pGDW21vrWrrW1
+
+certificate private_key   = KyZpNDKnfs94vbrwhJneDi77V6jF64PWPF8x5cdJb8ifgg2DUc9d
+certificate public_key    = 0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c
+certificate p2pkh address = 1JaUQDVNRdhfNsVncGkXedaPSM5Gc54Hso
+
+certificate message       = fidelity-bond-cert|0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c|375
+certificate signature     = H3cYEWxRT6dvJnliu9GkZmb7veDOeZBxBIKUHhbB8i/FAA3s6+Q3GT3GHdaFDo3Fnn3ZkuvmDSgczB8Ea+eiyH0=
+
+// example endpoint signing two IRC nicknames (used in JoinMarket)
+// note the endpoint signature is identical to the v1 vectors above: the certificate keypair is
+// independent of the fidelity bond derivation path and witness script, so it is unaffected by version
+endpoint message          = J54LS6YyJPoseqFS|J55VZ6U6ZyFDNeuv
+endpoint signature        = H18WE4MugDNoWZIf9jU0njhQptdUyBDUf7lToG9bpMKmeJK0lOoABaDs5bKnohSuZ0e9gnSco5OL9lXdKU7gP5E=
 </pre>
 
-Code generating these test vectors can be found here: https://github.com/chris-belcher/timelocked-addresses-fidelity-bond-bip-testvectors
+Code generating the v1 test vectors can be found here: https://github.com/chris-belcher/timelocked-addresses-fidelity-bond-bip-testvectors
 
 == Reference ==
 
@@ -186,7 +283,9 @@ Code generating these test vectors can be found here: https://github.com/chris-b
 * [[https://github.com/JoinMarket-Org/joinmarket-clientserver/blob/master/docs/fidelity-bonds.md|JoinMarket fidelity bonds doc page]]
 * [[bip-0065.mediawiki|BIP65 - OP_CHECKLOCKTIMEVERIFY]]
 * [[bip-0032.mediawiki|BIP32 - Hierarchical Deterministic Wallets]]
+* [[bip-0043.mediawiki|BIP43 - Purpose Field for Deterministic Wallets]]
 * [[bip-0044.mediawiki|BIP44 - Multi-Account Hierarchy for Deterministic Wallets]]
 * [[bip-0049.mediawiki|BIP49 - Derivation scheme for P2WPKH-nested-in-P2SH based accounts]]
 * [[bip-0084.mediawiki|BIP84 - Derivation scheme for P2WPKH based accounts]]
 * [[bip-0086.mediawiki|BIP86 - Key Derivation for Single Key P2TR Outputs]]
+* [[bip-0379.md|BIP379 - Miniscript]]
