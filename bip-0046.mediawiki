@@ -73,6 +73,8 @@ Version 1's <tt>witness script</tt> cannot be expressed in [[bip-0379.md|Miniscr
 
 Version 1 is retained rather than replaced because existing fidelity bonds were created under it, are already advertised as proof of sacrifice, and may still be timelocked years into the future; a wallet that dropped Version 1 support outright would simply stop finding those funds. Defining Version 2 as an additional scheme lets new bonds get the benefits above without making existing bonds unrecoverable.
 
+An open question raised during review is whether the certificate message should additionally bind the delegation to the specific bond script and network, e.g. `fidelity-bond-cert-v2|<bond address>|<cert_pubkey>|<cert_expiry>`, which would keep the message pure ASCII and human-signable while preventing a certificate from being replayed against a different script or network that happens to share the same key. This BIP does not adopt such a binding: fidelity bonds are meant to represent a single objective, unambiguous sacrifice, and letting one key back certificates for multiple bonds or networks would make that sacrifice harder to measure. A future revision may want to revisit this if a concrete need for it materializes.
+
 == Specifications ==
 
 This BIP defines the two needed steps to derive multiple deterministic addresses based on a [[bip-0032.mediawiki|BIP 32]] master private key. It also defines the format of the certificate that can be signed by the deterministic address key.
@@ -127,15 +129,17 @@ For both versions:
 
 The Version 2 template is written <tt>and_v(v:pk(K),after(T))</tt> in [[bip-0379.md|Miniscript]] notation, where <tt>K</tt> is <tt>derived_key</tt> and <tt>T</tt> is <tt>timelock</tt>. Unlike the Version 1 template, it is directly expressible in Miniscript, letting Miniscript-aware signing devices recognize, display and sign for Version 2 fidelity bond outputs without bespoke policy support. The Version 1 template is not expressible in Miniscript; see [[#rationale|Rationale]].
 
+Generic Miniscript support does not by itself make a signer capable of recognizing every Version 2 fidelity bond out of the box, however. A [[bip-0388.mediawiki|BIP 388]] wallet policy describes one output descriptor with ranged keys, but a fidelity bond account also varies its timelock per index (see [[#timelock-derivation|Timelock derivation]]): <tt>K</tt> is a plain ranged key derivable from the account xpub, but <tt>T</tt> is not expressible as a BIP 388 range, since it follows this BIP's index-to-month mapping rather than a linear or xpub-derived sequence. In practice a single fixed <tt>after(T)</tt> policy describes one specific bond, not a whole account of 960 of them, so a signer needs bespoke support for this BIP's timelock schedule in addition to generic Miniscript parsing to fully support Version 2 fidelity bonds.
+
 === Message signing ===
 
 In order to support signing of certificates, implementers should support signing ASCII messages.
 
-The certificate message is defined as `"fidelity-bond-cert" || "|" || cert_pubkey || "|" || cert_expiry`.
+The certificate message is defined as `"fidelity-bond-cert" || "|" || cert_pubkey || "|" || cert_expiry`, where `cert_pubkey` is the 33-byte compressed certificate public key encoded as exactly 66 lowercase hexadecimal characters, and `cert_expiry` is encoded as its shortest decimal representation (no leading zeros). The reference JoinMarket implementation historically signs the raw 33 bytes of `cert_pubkey` rather than its hex encoding, and existing JoinMarket software accepts both forms; this BIP requires the ASCII hex form for Version 2 so that the whole certificate message stays pure ASCII, which matters for hardware wallets and other signers that can only display and sign ASCII text.
 
 The certificate expiry `cert_expiry` is the number of the 2016-block period after which the certificate is no longer valid. For example, if `cert_expiry` is 330 then the certificate will become invalid after block height 665280 (:=330x2016). The purpose of the expiry parameter is so that in case the certificate keypair is compromised, the attacker can only impersonate the fidelity bond for a limited amount of time.
 
-A certificate message can be created by another application external to this standard. It is then prepended with the string `0x18 || "Bitcoin Signed Message:\n"` and a byte denoting the length of the certificate message. The whole thing is then signed with the private key of the <tt>derived_key</tt>. This part is identical to the "Sign Message" function which many wallets already implement.
+A certificate message can be created by another application external to this standard. It is then signed the same way as Bitcoin's widely-implemented "Sign Message" function: form the preimage `CompactSize(24) || "Bitcoin Signed Message:\n" || CompactSize(len(message)) || message`, where `CompactSize` is Bitcoin's variable-length integer encoding and `message` is the ASCII message bytes (the fixed 24-byte magic string always has the single-byte `CompactSize` prefix `0x18`); hash the preimage with SHA256d; and sign the resulting digest with ECDSA over secp256k1 using a low-S, 65-byte compact recoverable signature (1-byte header `27 + recovery_id + 4` for a compressed public key, followed by the 32-byte `r` and 32-byte `s` values), base64-encoded. The signature is made with the private key of the <tt>derived_key</tt>. Some existing tooling, such as JoinMarket's fidelity bond proof format, instead stores this signature DER-encoded together with a separate recovery flag inside a fixed 252-byte structure; implementers interoperating with that format need to convert between the two encodings.
 
 Almost all wallets implementing this standard can use their already-existing "Sign Message" function to sign the certificate message. As the certificate message itself is always an ASCII string, the wallet may not need to specially implement this section at all but just rely on users copypasting their certificate message into the already-existing "Sign Message" user interface. This works as long as the wallet knows how to use the private key of the timelocked address for signing messages.
 
@@ -229,6 +233,8 @@ address             = bc1qx9fvepmj24wr4mr04zj22gtjx5eap8dy06v6c8evm44dkr3pm0yst3
 //  signature in any wallet that supports Verify Message.
 // As mentioned before, it is more important for implementers of this standard to support signing such messages, not verifying them
 message       = fidelity-bond-cert|020000000000000000000000000000000000000000000000000000000000000001|375
+framed preimage = 18426974636f696e205369676e6564204d6573736167653a0a59666964656c6974792d626f6e642d636572747c3032303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030317c333735
+digest        = b35542aaf7c0acdb9ab3a9c48197d9bc323dd45d66afca33d226643356ff023a
 address       = bc1qx9fvepmj24wr4mr04zj22gtjx5eap8dy06v6c8evm44dkr3pm0yst3mmhn
 p2pkh address = 17KGrfRcvDihzVTwBGP9CdmEMsncFsAHF2
 signature     = H+ZQ9PqJFaUgkYx77cYCyO7pMrNUMTNsm98lApLzgLZxfjhCmmVMSJ0MiEo0UzE1tNpf+HGlXrDgtgxGvCcMgds=
@@ -280,6 +286,55 @@ endpoint signature        = H18WE4MugDNoWZIf9jU0njhQptdUyBDUf7lToG9bpMKmeJK0lOoA
 
 Code generating the Version 1 test vectors can be found here: https://github.com/chris-belcher/timelocked-addresses-fidelity-bond-bip-testvectors
 
+=== PSBT example (Version 2) ===
+
+The following worked example shows the full signing flow for a Version 2 fidelity bond, from an unsigned [[bip-0174.mediawiki|PSBT]] through to a finalized transaction, including the fields a hardware wallet needs (<tt>witness_utxo</tt>, <tt>witness_script</tt>, <tt>PSBT_IN_BIP32_DERIVATION</tt>, <tt>PSBT_GLOBAL_XPUB</tt>, <tt>SIGHASH_ALL</tt>, a non-final <tt>nSequence</tt>, and the transaction <tt>nLocktime</tt> required by <tt>OP_CHECKLOCKTIMEVERIFY</tt>). It spends the first timelocked address (<tt>m/46'/0'/0'/0/0</tt>) from the Version 2 test vectors above. The funding outpoint is illustrative and not a real UTXO.
+
+<pre>
+account xpub (m/46'/0'/0')  = xpub6Cxtx4tazSjzXyPEZBHf1HA1CXGjM7o39VkSsB8yVKHjpU7sK91jJXRchDZvRUbcBHgvsR3wmVcoyBraq5BxTDTkqRQwPHcB63oSWjn1tyL
+master key fingerprint      = 73c5da0a
+
+// illustrative funding outpoint, not a real UTXO
+funding txid    = 0100000000000000000000000000000000000000000000000000000000000000
+funding vout    = 0
+funding amount  = 1000000
+funding scriptPubKey = 00203152cc8772555c3aec6fa8a4a521723533d09da47e99ac1f2cdd6adb0e21dbc9
+destination scriptPubKey = 00140000000000000000000000000000000000000000
+destination amount = 999000
+nSequence (non-final) = 0xfffffffe
+
+// ==================== mature spend: nLocktime = bond timelock (1577836800) ====================
+sighash preimage (BIP 143) = 02000000d5a45bffe65ef500725b4bc16e60ba39910d364324f702be75ed825c1c78a50c18606b350cd8bf565266bc352f0caddcf01e8fa789dd8a15386327cf8cabe198010000000000000000000000000000000000000000000000000000000000000000000000292103ff137af5f9b2e31e4bc2a75210c3f594c3a0c7881561c08560f5036e6831cabbad0400e10b5eb140420f0000000000feffffff1e03d82b1393e807b83b91e3e07625bcce34c2ebba037158ba7aaf810ddf450900e10b5e01000000
+sighash                    = 477778db7c5b8df2f1470134d3d622d5b1cad63619bc0cee73321c96adad6600
+signature (DER)            = 3045022100ab38c0b615783ba63a2bfb36b254fd35be950dd7a0b80aacad9ac7af4cd7998902202d5f0815affd09f7e992996e8f7b541a519bea73b40d4ba4b7fcc5b748b1a818
+
+PSBT (unsigned, base64) =
+cHNidP8BAFICAAAAAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////AVg+DwAAAAAAFgAUAAAAAAAAAAAAAAAAAAAAAAAAAAAA4QteTwEEiLIeA7KSvU+AAAAAJiSBPXZ4DFD3ldKyqCfW1Gggb6yWRPX7eeBu0rhdSvAC0xm8t3ymcssMfuNHJKYldqOLXf7l7xolBqAOz/5bxV8Qc8XaCi4AAIAAAACAAAAAgAABAStAQg8AAAAAACIAIDFSzIdyVVw67G+opKUhcjUz0J2kfpmsHyzdatsOIdvJAQUpIQP/E3r1+bLjHkvCp1IQw/WUw6DHiBVhwIVg9QNuaDHKu60EAOELXrEiBgP/E3r1+bLjHkvCp1IQw/WUw6DHiBVhwIVg9QNuaDHKuxhzxdoKLgAAgAAAAIAAAACAAAAAAAAAAAABAwQBAAAAAAA=
+
+PSBT (partially signed, base64) =
+cHNidP8BAFICAAAAAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////AVg+DwAAAAAAFgAUAAAAAAAAAAAAAAAAAAAAAAAAAAAA4QteTwEEiLIeA7KSvU+AAAAAJiSBPXZ4DFD3ldKyqCfW1Gggb6yWRPX7eeBu0rhdSvAC0xm8t3ymcssMfuNHJKYldqOLXf7l7xolBqAOz/5bxV8Qc8XaCi4AAIAAAACAAAAAgAABAStAQg8AAAAAACIAIDFSzIdyVVw67G+opKUhcjUz0J2kfpmsHyzdatsOIdvJAQUpIQP/E3r1+bLjHkvCp1IQw/WUw6DHiBVhwIVg9QNuaDHKu60EAOELXrEiBgP/E3r1+bLjHkvCp1IQw/WUw6DHiBVhwIVg9QNuaDHKuxhzxdoKLgAAgAAAAIAAAACAAAAAAAAAAAABAwQBAAAAIgID/xN69fmy4x5LwqdSEMP1lMOgx4gVYcCFYPUDbmgxyrtIMEUCIQCrOMC2FXg7pjor+zayVP01vpUN16C4CqytmsevTNeZiQIgLV8IFa/9Cffpkpluj3tUGlGb6nO0DUukt/zFt0ixqBgBAAA=
+
+final transaction (hex) =
+0200000000010101000000000000000000000000000000000000000000000000000000000000000000000000feffffff01583e0f0000000000160014000000000000000000000000000000000000000002483045022100ab38c0b615783ba63a2bfb36b254fd35be950dd7a0b80aacad9ac7af4cd7998902202d5f0815affd09f7e992996e8f7b541a519bea73b40d4ba4b7fcc5b748b1a81801292103ff137af5f9b2e31e4bc2a75210c3f594c3a0c7881561c08560f5036e6831cabbad0400e10b5eb100e10b5e
+
+txid = ee196513794ad620dcbac143882bdf578c3876d565888892964afe5a0b4c9f13
+
+// ==================== pre-locktime failure: nLocktime = timelock - 1 (1577836799) ====================
+// Same funding, key, and witness script as above, but the transaction's nLocktime is one second before
+// the bond's timelock. The ECDSA signature below is valid (nLocktime is covered by the BIP 143 sighash,
+// so it is a different, independently valid signature from the mature-spend one above), but the resulting
+// transaction is invalid consensus-wise: OP_CHECKLOCKTIMEVERIFY requires nLocktime >= the value pushed by
+// the witness script, so script verification fails even though the signature checks out.
+sighash preimage (BIP 143) = 02000000d5a45bffe65ef500725b4bc16e60ba39910d364324f702be75ed825c1c78a50c18606b350cd8bf565266bc352f0caddcf01e8fa789dd8a15386327cf8cabe198010000000000000000000000000000000000000000000000000000000000000000000000292103ff137af5f9b2e31e4bc2a75210c3f594c3a0c7881561c08560f5036e6831cabbad0400e10b5eb140420f0000000000feffffff1e03d82b1393e807b83b91e3e07625bcce34c2ebba037158ba7aaf810ddf4509ffe00b5e01000000
+sighash                    = b322aed4195eb35b819f3e7d92963ec88de0eddb2b786180dc62141fe4e11fe2
+signature (DER)            = 304402206e2920342f936991649fed82a059142161e5f3b37ba00f5c91f54375021f30aa02207654912bf2f96713a14d5d728df4619e3311b71216714b65d802fef895f36a71
+
+final transaction (hex, fails script verification) =
+0200000000010101000000000000000000000000000000000000000000000000000000000000000000000000feffffff01583e0f000000000016001400000000000000000000000000000000000000000247304402206e2920342f936991649fed82a059142161e5f3b37ba00f5c91f54375021f30aa02207654912bf2f96713a14d5d728df4619e3311b71216714b65d802fef895f36a7101292103ff137af5f9b2e31e4bc2a75210c3f594c3a0c7881561c08560f5036e6831cabbad0400e10b5eb1ffe00b5e
+</pre>
+
+The unsigned PSBT, sighash preimages, and final transactions above were cross-checked against independent parsers (a BIP 143 sighash implementation and a PSBT/transaction parser from a separate codebase) in addition to this BIP's own reference derivation code.
+
 == Reference ==
 
 * [[https://gist.github.com/chris-belcher/18ea0e6acdb885a2bfbdee43dcd6b5af/|Design for improving JoinMarket's resistance to sybil attacks using fidelity bonds]]
@@ -291,13 +346,19 @@ Code generating the Version 1 test vectors can be found here: https://github.com
 * [[bip-0049.mediawiki|BIP49 - Derivation scheme for P2WPKH-nested-in-P2SH based accounts]]
 * [[bip-0084.mediawiki|BIP84 - Derivation scheme for P2WPKH based accounts]]
 * [[bip-0086.mediawiki|BIP86 - Key Derivation for Single Key P2TR Outputs]]
+* [[bip-0174.mediawiki|BIP174 - Partially Signed Bitcoin Transaction Format]]
 * [[bip-0379.md|BIP379 - Miniscript]]
+* [[bip-0388.mediawiki|BIP388 - Wallet Policies for Descriptor Wallets]]
+
+== Acknowledgements ==
+
+Thanks to m0wer for review feedback on the Version 2 revision, which shaped the ASCII-only certificate message encoding, the precise message-signing algorithm description, the caveats on Miniscript hardware wallet support for varying per-bond timelocks, and the addition of PSBT-level test vectors.
 
 == Changelog ==
 
 To help implementers understand updates to this document, a version number resembling ''semantic versioning'' (<tt>MAJOR.MINOR.PATCH</tt>) is used, as described in [[bip-0003.md|BIP 3]]. The <tt>MAJOR</tt> version is incremented for changes incompatible with prior versions, <tt>MINOR</tt> for backward-compatible additions or extensions, and <tt>PATCH</tt> for other noteworthy changes (bug fixes, test vectors, clarifications, etc.).
 
-* '''2.0.0''' (2026-08-10):
-** Add the Version 2 derivation scheme with a dedicated <tt>purpose'</tt> field (<tt>m/46'</tt>), <tt>change</tt> set to the conventional external-chain value <tt>0</tt> (<tt>m/46'/0'/0'/0/index</tt>), and a Miniscript-compatible <tt>witness script</tt>, alongside the existing Version 1 scheme (<tt>m/84'/0'/0'/2/index</tt>); add corresponding test vectors and update Rationale and Backwards Compatibility accordingly.
+* '''2.0.0''' (2026-08-11):
+** Add the Version 2 derivation scheme with a dedicated <tt>purpose'</tt> field (<tt>m/46'</tt>), <tt>change</tt> set to the conventional external-chain value <tt>0</tt> (<tt>m/46'/0'/0'/0/index</tt>), and a Miniscript-compatible <tt>witness script</tt>, alongside the existing Version 1 scheme (<tt>m/84'/0'/0'/2/index</tt>); add corresponding test vectors and update Rationale and Backwards Compatibility accordingly. Require Version 2 certificate messages to encode <tt>cert_pubkey</tt> as lowercase hex instead of raw bytes, for pure-ASCII hardware wallet compatibility; spell out the exact message-signing preimage, hashing, and signature encoding; add a caveat that generic Miniscript support does not by itself cover every Version 2 bond due to per-bond timelocks; add a worked PSBT v0 example (mature-spend and pre-locktime-failure); note and defer an open question about binding certificates to a specific bond script and network. Feedback from m0wer.
 * '''1.0.0''' (2024-05-23):
 ** Initial version, merged as BIP-46, defining the Version 1 scheme.
