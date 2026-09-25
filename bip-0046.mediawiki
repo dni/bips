@@ -10,14 +10,14 @@
   Assigned: 2022-04-01
   License: CC0-1.0
   Discussion: 2022-05-01: https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2022-May/020389.html
-  Version: 2.0.0
+  Version: 3.0.0
 </pre>
 
 == Abstract ==
 
 This BIP defines the derivation scheme for HD wallets which create timelocked addresses used for creating fidelity bonds. It also gives advice to wallet developers on how to use fidelity bonds to sign over messages, such as certificates, which are needed when using fidelity bonds that are stored offline.
 
-Two versions of the scheme are defined: Version 1, the original scheme already deployed in JoinMarket, and Version 2, a revision using a dedicated derivation <tt>purpose</tt> and a Miniscript-compatible <tt>witness script</tt>. Wallets SHOULD create new fidelity bonds using Version 2, and SHOULD also recognize Version 1 fidelity bonds that already exist.
+Three versions of the scheme are defined: Version 1, the original scheme already deployed in JoinMarket; Version 2, a revision using a dedicated derivation <tt>purpose</tt> and a Miniscript-compatible <tt>witness script</tt>; and Version 3, a Taproot ([[bip-0341.mediawiki|BIP341]]) variant of Version 2's script, committed as the sole leaf of a script-path-only Taproot output. Wallets SHOULD create new fidelity bonds using Version 2 or Version 3, and SHOULD also recognize Version 1 and Version 2 fidelity bonds that already exist.
 
 == Copyright ==
 
@@ -37,9 +37,9 @@ This allows keeping the private keys of fidelity bonds in cold storage, which in
 
 This BIP is not backwards compatible with generic wallets by design, as described in the Considerations section of [[bip-0049.mediawiki|BIP 49]]. A wallet that does not implement this BIP at all will not discover fidelity bonds and the user will notice that something is wrong.
 
-Within this BIP, Version 1 and Version 2 use different <tt>purpose</tt> fields and different <tt>witness script</tt> templates (see [[#public-key-derivation|Public key derivation]] and [[#address-derivation|Address derivation]]), so they occupy disjoint parts of the derivation tree and neither collides with nor overwrites the other. This lets an implementation support both at once: Version 1 is kept in the spec, unchanged from the deployed JoinMarket scheme, purely so that software can still find and spend fidelity bonds created before Version 2 existed. Version 2 is the scheme new fidelity bonds should be created under, since it gives fidelity bonds their own <tt>purpose</tt> and uses a <tt>witness script</tt> that Miniscript-aware signing devices can parse.
+Within this BIP, Version 1, Version 2 and Version 3 use different <tt>purpose</tt>/<tt>change</tt> combinations and different output types (see [[#public-key-derivation|Public key derivation]] and [[#address-derivation|Address derivation]]), so they occupy disjoint parts of the derivation tree and neither collides with nor overwrites the others. This lets an implementation support all three at once: Version 1 is kept in the spec, unchanged from the deployed JoinMarket scheme, purely so that software can still find and spend fidelity bonds created before Version 2 existed. Version 2 and Version 3 are the schemes new fidelity bonds should be created under, since both give fidelity bonds their own <tt>purpose</tt> and use a <tt>witness script</tt>/tapscript leaf that Miniscript-aware signing devices can parse; Version 3 additionally makes the bond's pre-spend output indistinguishable from an ordinary single-key Taproot output (see [[#rationale|Rationale]]).
 
-A wallet implementing only Version 1 will not discover Version 2 fidelity bonds, and a wallet implementing only Version 2 will not discover Version 1 fidelity bonds created by earlier software. Wallets SHOULD implement both: generate and check Version 2 addresses for new fidelity bonds, and additionally scan Version 1 addresses so that funds already locked up under the original scheme remain discoverable until they are spent or expire.
+A wallet implementing only Version 1 will not discover Version 2 or Version 3 fidelity bonds, and a wallet implementing only Version 2 will not discover Version 1 or Version 3 fidelity bonds, and so on. Wallets SHOULD implement all three: generate and check Version 2 and/or Version 3 addresses for new fidelity bonds, and additionally scan Version 1 addresses so that funds already locked up under the original scheme remain discoverable until they are spent or expire.
 
 == Background ==
 
@@ -75,6 +75,16 @@ Version 1 is retained rather than replaced because existing fidelity bonds were 
 
 An open question raised during review is whether the certificate message should additionally bind the delegation to the specific bond script and network, e.g. `fidelity-bond-cert-v2|<bond address>|<cert_pubkey>|<cert_expiry>`, which would keep the message pure ASCII and human-signable while preventing a certificate from being replayed against a different script or network that happens to share the same key. This BIP does not adopt such a binding: fidelity bonds are meant to represent a single objective, unambiguous sacrifice, and letting one key back certificates for multiple bonds or networks would make that sacrifice harder to measure. A future revision may want to revisit this if a concrete need for it materializes.
 
+Version 2's <tt>witness script</tt> is carried by a P2WSH output, which is visibly "a script, not a single key" the moment it is created, since P2WPKH and P2WSH use distinguishable witness program lengths (20 vs. 32 bytes). A wallet whose ordinary receive addresses are Taproot ([[bip-0341.mediawiki|BIP341]]) singles this fidelity bond output out from the rest of its own outputs before the bond is ever spent or its script revealed, weakly fingerprinting which of a wallet's outputs are bonds. Version 3 addresses this by locking the bond to a Taproot output instead: every Version 3 fidelity bond, before it is spent, has exactly the same 34-byte <tt>scriptPubKey</tt> shape as an ordinary single-key Taproot address (e.g. one generated per [[bip-0086.mediawiki|BIP 86]]), blending it into the much larger and still-growing set of everyday Taproot outputs on the chain, rather than standing out as belonging to the smaller set of P2WSH outputs.
+
+To get this blending-in property, the Taproot output must have no usable key path, since a spendable key path would let the bond be spent before its timelock, defeating the point of the sacrifice. Version 3 therefore uses a fixed, published ''internal key'' with no known discrete logarithm: the <tt>H</tt> point BIP341 itself gives as an example "Nothing Up My Sleeve" (NUMS) point, <tt>lift_x(0x50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0)</tt>, constructed by taking the hash of the standard uncompressed encoding of the secp256k1 base point as an X coordinate. Every Version 3 fidelity bond across every wallet uses this exact same internal key; Version 3 deliberately does not follow BIP341's own suggestion of randomizing the internal key as <tt>H + rG</tt> for a per-output secret <tt>r</tt>, because that suggestion is aimed at hiding the fact that no key path exists. A fidelity bond has the opposite goal: the whole point is to let a third party verify, directly from the address, that the funds can only move once the timelock has passed (see [[#background|Background]]), so using the same fixed, publicly-known <tt>H</tt> for every bond keeps that property trivially auditable rather than something the bond owner would need to separately prove by revealing <tt>r</tt>.
+
+The tapscript leaf is the single script-path spending condition, and reuses Version 2's exact template `<derived_key> OP_CHECKSIGVERIFY <timelock> OP_CHECKLOCKTIMEVERIFY`, adjusted only for Tapscript's own key convention: `derived_key` is pushed as a 32-byte x-only key (per [[bip-0340.mediawiki|BIP340]]) rather than a 33-byte compressed key, since [[bip-0342.mediawiki|BIP342]] tapscript's <tt>OP_CHECKSIG</tt>/<tt>OP_CHECKSIGVERIFY</tt> only accept the x-only encoding. This keeps the same Miniscript fragment <tt>and_v(v:pk(K),after(T))</tt> that motivated Version 2 (see above), just evaluated in a Tapscript context, so the same Miniscript-aware-signing-device argument applies to Version 3 as to Version 2. Because there is only one leaf, the Taproot Merkle root is simply that leaf's tapleaf hash, and the control block needed to spend it carries no Merkle path, only the leaf version/parity byte and the internal key.
+
+Version 3 reuses Version 2's <tt>purpose'</tt> of <tt>46'</tt> rather than registering a third dedicated purpose, and instead picks a new <tt>change</tt> value (<tt>1</tt>) to stay disjoint from Version 2's addresses, the same way Version 1 originally used a dedicated <tt>change</tt> value to stay disjoint from ordinary BIP 84 addresses under a shared <tt>purpose</tt>. A third top-level purpose was judged unnecessary: Version 3 is still fundamentally "a BIP 46 fidelity bond", just committed to a Taproot output instead of a P2WSH one, and <tt>46'</tt> already unambiguously identifies the address as belonging to this BIP.
+
+Version 3 is not a strict improvement over Version 2: a script-path spend reveals a control block (33 bytes for a single leaf, versus none for P2WSH), so spending a Version 3 bond has a slightly larger on-chain footprint than spending a Version 2 one. This is judged an acceptable trade for the blending-in benefit above, since a fidelity bond is normally spent at most once, at or after its expiry, while it sits unspent (and therefore benefits from looking like an ordinary output) for as long as it is used as proof of sacrifice.
+
 == Specifications ==
 
 This BIP defines the two needed steps to derive multiple deterministic addresses based on a [[bip-0032.mediawiki|BIP 32]] master private key. It also defines the format of the certificate that can be signed by the deterministic address key.
@@ -93,11 +103,18 @@ Version 2:
 m / 46' / 0' / 0' / 0 / index
 </pre>
 
+Version 3:
+<pre>
+m / 46' / 0' / 0' / 1 / index
+</pre>
+
 Version 1 reuses BIP 84's <tt>purpose</tt> field; it is retained unchanged from the deployed JoinMarket scheme purely so existing fidelity bonds remain discoverable, see [[#rationale|Rationale]]. Because Version 1's <tt>account</tt> level (<tt>m/84'/0'/0'</tt>) is shared with a wallet's ordinary BIP 84 receive and change addresses, Version 1 sets <tt>change</tt> to <tt>2</tt>, a value BIP 44 never uses for its external (<tt>0</tt>) or internal (<tt>1</tt>) chains, so that fidelity bond addresses cannot collide with them.
 
 Version 2 uses its own <tt>purpose</tt> field of <tt>46'</tt>, matching this BIP's number as recommended by [[bip-0043.mediawiki|BIP 43]], and SHOULD be used for creating new fidelity bonds. Nothing else is derived under <tt>m/46'</tt>, so there is no shared account to collide with and no need for the <tt>change</tt> workaround Version 1 relies on; Version 2 uses the conventional external-chain value of <tt>0</tt> instead. This also makes Version 2 paths look like an ordinary BIP 44-style path to generic path-sanity checks in signing devices, rather than tripping "unusual path" warnings the way Version 1's <tt>2</tt> can.
 
-A key derived with either of these derivation path patterns will be referred to as <tt>derived_key</tt> further in this document; which version's path was used to derive it should be tracked alongside it, since it also determines which <tt>witness script</tt> template applies (see [[#address-derivation|Address derivation]]).
+Version 3 shares Version 2's <tt>purpose</tt> field of <tt>46'</tt>, since it is still a BIP 46 fidelity bond, just committed to a Taproot output instead of a P2WSH one (see [[#rationale|Rationale]]). It uses <tt>change</tt> value <tt>1</tt> to stay disjoint from Version 2's own <tt>0</tt> under the shared <tt>m/46'/0'/0'</tt> account, the same way Version 1 uses a dedicated <tt>change</tt> value to stay disjoint from ordinary addresses under its shared <tt>purpose</tt>. Additionally, Version 3 uses <tt>derived_key</tt> in its x-only form <tt>x(derived_key)</tt> (dropping the Y-coordinate parity byte of the BIP 32-derived compressed public key, as [[bip-0086.mediawiki|BIP 86]] does) wherever it is pushed into the tapscript leaf; the full compressed <tt>derived_key</tt> is still used unchanged for message signing (see [[#message-signing|Message signing]]).
+
+A key derived with any of these derivation path patterns will be referred to as <tt>derived_key</tt> further in this document; which version's path was used to derive it should be tracked alongside it, since it also determines which <tt>witness script</tt>/tapscript template applies (see [[#address-derivation|Address derivation]]).
 
 For <tt>index</tt>, addresses are numbered from 0 in a sequentially increasing manner with a fixed upper bound: The index only goes up to <tt>959</tt> inclusive. Only 960 addresses can be derived per version for a given BIP32 master key. Furthermore there is no concept of a gap limit, instead wallets must always generate all 960 addresses of a version and check for all of them if they have a balance and history.
 
@@ -121,7 +138,7 @@ Version 1 (legacy):
 Version 2:
     witnessScript: <derived_key> OP_CHECKSIGVERIFY <timelock> OP_CHECKLOCKTIMEVERIFY
 
-For both versions:
+For Version 1 and Version 2:
     witness:      <signature> <witnessScript>
     scriptSig:    (empty)
     scriptPubKey: 0 <32-byte-hash>
@@ -130,6 +147,36 @@ For both versions:
 The Version 2 template is written <tt>and_v(v:pk(K),after(T))</tt> in [[bip-0379.md|Miniscript]] notation, where <tt>K</tt> is <tt>derived_key</tt> and <tt>T</tt> is <tt>timelock</tt>. Unlike the Version 1 template, it is directly expressible in Miniscript, letting Miniscript-aware signing devices recognize, display and sign for Version 2 fidelity bond outputs without bespoke policy support. The Version 1 template is not expressible in Miniscript; see [[#rationale|Rationale]].
 
 Generic Miniscript support does not by itself make a signer capable of recognizing every Version 2 fidelity bond out of the box, however. A [[bip-0388.mediawiki|BIP 388]] wallet policy describes one output descriptor with ranged keys, but a fidelity bond account also varies its timelock per index (see [[#timelock-derivation|Timelock derivation]]): <tt>K</tt> is a plain ranged key derivable from the account xpub, but <tt>T</tt> is not expressible as a BIP 388 range, since it follows this BIP's index-to-month mapping rather than a linear or xpub-derived sequence. In practice a single fixed <tt>after(T)</tt> policy describes one specific bond, not a whole account of 960 of them, so a signer needs bespoke support for this BIP's timelock schedule in addition to generic Miniscript parsing to fully support Version 2 fidelity bonds.
+
+==== Version 3 (Taproot) ====
+
+Version 3 locks the funds using a [[bip-0341.mediawiki|BIP341]] Taproot output whose only spending path is a single tapscript leaf, rather than a P2WSH output.
+
+The '''internal key''' is the fixed NUMS point defined in BIP341:
+    internal_key: lift_x(0x50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0)
+
+This point has no known discrete logarithm (see [[#rationale|Rationale]]), so the output has no usable key path; every Version 3 fidelity bond, regardless of wallet or index, uses this same constant as its internal key.
+
+The '''tapscript leaf''' (leaf version <tt>0xc0</tt>, per [[bip-0342.mediawiki|BIP342]]) is:
+    tapLeafScript: x(derived_key) OP_CHECKSIGVERIFY <timelock> OP_CHECKLOCKTIMEVERIFY
+
+where <tt>x(derived_key)</tt> is the 32-byte x-only encoding of <tt>derived_key</tt> (see [[#public-key-derivation|Public key derivation]]). This is the same template as Version 2's <tt>witnessScript</tt>, so it is likewise <tt>and_v(v:pk(K),after(T))</tt> in Miniscript notation, evaluated in a Tapscript context; the same Miniscript-aware-signing-device argument and the same BIP 388 caveat about per-bond timelocks that apply to Version 2 (see above) apply equally to Version 3.
+
+Since there is only one leaf, the '''Merkle root''' is simply that leaf's tapleaf hash:
+    merkle_root: tagged_hash("TapLeaf", 0xc0 || compact_size(len(tapLeafScript)) || tapLeafScript)
+
+The '''output key''' <tt>Q</tt> and its parity are computed exactly as specified in BIP341:
+    Q = internal_key + int(tagged_hash("TapTweak", internal_key || merkle_root)) * G
+
+    witness:      <signature> <tapLeafScript> <control_block>
+                  where control_block = (0xc0 | output_key_parity) || internal_key
+    scriptSig:    (empty)
+    scriptPubKey: 1 <32-byte-x(Q)>
+                  (0x5120{32-byte-x(Q)})
+
+    address:      bech32m-encoded per [[bip-0350.mediawiki|BIP350]]
+
+Because there is only one leaf, <tt>control_block</tt> carries no Merkle path: it is exactly 33 bytes, a single leaf-version/parity byte followed by the 32-byte internal key. <tt>signature</tt> is a [[bip-0340.mediawiki|BIP340]] Schnorr signature over the leaf's [[bip-0341.mediawiki|BIP341 script-path sighash]], made with the private key corresponding to <tt>x(derived_key)</tt> (BIP340 signing already handles the case where <tt>derived_key</tt>'s Y coordinate is odd internally, the same as any other Taproot script-path signature).
 
 === Message signing ===
 
@@ -144,6 +191,8 @@ A certificate message can be created by another application external to this sta
 Almost all wallets implementing this standard can use their already-existing "Sign Message" function to sign the certificate message. As the certificate message itself is always an ASCII string, the wallet may not need to specially implement this section at all but just rely on users copypasting their certificate message into the already-existing "Sign Message" user interface. This works as long as the wallet knows how to use the private key of the timelocked address for signing messages.
 
 It is most important for wallet implementations of this standard to support creating the certificate signature. Verifying the certificate signature is less important.
+
+This message-signing procedure is identical for all three versions, including Version 3: <tt>derived_key</tt> is an ordinary secp256k1 keypair regardless of version, and only its use inside the tapscript leaf requires the x-only, BIP340-signed form (see [[#address-derivation|Address derivation]]). Certificates for Version 3 bonds are therefore signed the same way as Version 1 and Version 2 ones, with the full compressed <tt>derived_key</tt>.
 
 
 == Test vectors ==
@@ -282,7 +331,86 @@ certificate signature     = IJxGwHOKrwUjTuRi0UVDYbh0Kbex9d8yR/x1KBe5rvCDVBohP0YC
 // independent of the fidelity bond derivation path and witness script, so it is unaffected by version
 endpoint message          = J54LS6YyJPoseqFS|J55VZ6U6ZyFDNeuv
 endpoint signature        = H18WE4MugDNoWZIf9jU0njhQptdUyBDUf7lToG9bpMKmeJK0lOoABaDs5bKnohSuZ0e9gnSco5OL9lXdKU7gP5E=
+
+// ==================== Version 3 (Taproot) ====================
+
+// internal key, fixed for every Version 3 fidelity bond (see Rationale)
+internal key = 50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0
+
+// First timelocked address = m/46'/0'/0'/1/0
+derived private_key = L4Cr78jiTWSJdgyHa6j95jjUCehPK1gmqnQjzTkF8NVqPAUYuK3t
+derived public_key  = 033aaaae4024cffe40ab0ee0df6109729eacd911fac1b81c0c83de31e4ffdc419e
+x(derived_key)      = 3aaaae4024cffe40ab0ee0df6109729eacd911fac1b81c0c83de31e4ffdc419e
+unix locktime       = 1577836800
+string locktime     = 2020-01-01 00:00:00
+tapLeafScript       = 203aaaae4024cffe40ab0ee0df6109729eacd911fac1b81c0c83de31e4ffdc419ead0400e10b5eb1
+tapleaf hash        = 2fba5269cd4c3d957c5bfdb390b4abc6b68bf57f380ffd88dcc13133a36d3f69
+merkle root         = 2fba5269cd4c3d957c5bfdb390b4abc6b68bf57f380ffd88dcc13133a36d3f69
+output key x(Q)     = fb0f8c541467bf0535f78f8c0cad0827e8abdb759ca63d5f7146379452c6d24e
+output key parity   = even
+control block       = c050929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0
+scriptPubKey        = 5120fb0f8c541467bf0535f78f8c0cad0827e8abdb759ca63d5f7146379452c6d24e
+address             = bc1plv8cc4q5v7ls2d0h37xqetggyl52hkm4njnr6hm3gcmeg5kx6f8qpvw3h9
+
+// Test certificate using the first timelocked address, signed the same way as Version 1/Version 2 (see Message signing)
+message       = fidelity-bond-cert|0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c|375
+framed preimage = 18426974636f696e205369676e6564204d6573736167653a0a59666964656c6974792d626f6e642d636572747c3033333064353466643064643432306136653566386433363234663566333438326361653335306637396435663037353362663562656566396332643931616633637c333735
+digest        = 0bf60ceb8c54f310460710ce2f782d4f9e53fdfd4e9230032e53fb814a6ee176
+address       = bc1plv8cc4q5v7ls2d0h37xqetggyl52hkm4njnr6hm3gcmeg5kx6f8qpvw3h9
+p2pkh address = 14NWan7DhnPd1pQ3wqm8Lce5WJfhrAKUVg
+signature     = IBNLuiCOaEoHFxhpHYxMVhJYtI+tsE65OL30BL/5v3AXRNVItBp6QEMbfjFNZgQtdDon4SCtUHmaGiTvms/UkNc=
+
+// 2nd timelocked address = m/46'/0'/0'/1/1
+derived private_key = L2Ni9Q9HoVnGjhUEvCve6WroGNVm44osS8SchEUPd1vY7cVoAY56
+derived public_key  = 02b182600e0bbca5dd9f33222420dcc004f5cdf366ae32e3261285c9781f03c9e5
+x(derived_key)      = b182600e0bbca5dd9f33222420dcc004f5cdf366ae32e3261285c9781f03c9e5
+unix locktime       = 1580515200
+string locktime     = 2020-02-01 00:00:00
+tapLeafScript       = 20b182600e0bbca5dd9f33222420dcc004f5cdf366ae32e3261285c9781f03c9e5ad0480bf345eb1
+tapleaf hash        = 3d8c8ab11e3f85cc88ade4d3a770d275178a41ab33111117b4b0c6c298c67703
+merkle root         = 3d8c8ab11e3f85cc88ade4d3a770d275178a41ab33111117b4b0c6c298c67703
+output key x(Q)     = 9bb7be3318d3fb6b0924856f3a886c388a95ef8e47a780701ad23f1b46b533f7
+output key parity   = odd
+control block       = c150929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0
+scriptPubKey        = 51209bb7be3318d3fb6b0924856f3a886c388a95ef8e47a780701ad23f1b46b533f7
+address             = bc1pnwmmuvcc60akkzfys4hn4zrv8z9ftmuwg7ncquq66gl3k344x0ms29d4sk
+
+// timelocked address after the year 2038 = m/46'/0'/0'/1/240
+derived private_key = Kx8Vcy4rZY5u3JBuGuPi3M6dm9RWSWWWBsDb3RiWfRcrMN8qU9NB
+derived public_key  = 032acbddd0130f5dac6731a25a5e079af6d6ae135e88973b166eb0aa6f15c13388
+x(derived_key)      = 2acbddd0130f5dac6731a25a5e079af6d6ae135e88973b166eb0aa6f15c13388
+unix locktime       = 2208988800
+string locktime     = 2040-01-01 00:00:00
+tapLeafScript       = 202acbddd0130f5dac6731a25a5e079af6d6ae135e88973b166eb0aa6f15c13388ad05807eaa8300b1
+tapleaf hash        = 28b3150542978947f05d75f2dcd069d461d64f88fc99e71890094bc81a580884
+merkle root         = 28b3150542978947f05d75f2dcd069d461d64f88fc99e71890094bc81a580884
+output key x(Q)     = 5b83e20dbf2276fdb7fcdbc7c0c0067fbe08d0e55e10ec15f915827db37f13b0
+output key parity   = even
+control block       = c050929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0
+scriptPubKey        = 51205b83e20dbf2276fdb7fcdbc7c0c0067fbe08d0e55e10ec15f915827db37f13b0
+address             = bc1ptwp7yrdlyfm0mdlum0rupsqx07lq3589tcgwc90ezkp8mvmlzwcqgsk4nx
+
+// last timelocked address = m/46'/0'/0'/1/959
+derived private_key = L2aWPS3zVGoEFDKF4pLkioh3pFXBssEpGTq8UEx93xj4aZCVzHVS
+derived public_key  = 02283503d9a41566c5104b3279b65f4103448ef6640f3fcf356fc42d99dc3a95ce
+x(derived_key)      = 283503d9a41566c5104b3279b65f4103448ef6640f3fcf356fc42d99dc3a95ce
+unix locktime       = 4099766400
+string locktime     = 2099-12-01 00:00:00
+tapLeafScript       = 20283503d9a41566c5104b3279b65f4103448ef6640f3fcf356fc42d99dc3a95cead0580785df400b1
+tapleaf hash        = 41f91258dd01c7cd65ab7c2a8c6377e6c462fd8011b10bb20801ee18a720465d
+merkle root         = 41f91258dd01c7cd65ab7c2a8c6377e6c462fd8011b10bb20801ee18a720465d
+output key x(Q)     = 272cebd048ae9c5f920ddc5a09f11183251ae10c148310cc97184d04d5ef4d1b
+output key parity   = odd
+control block       = c150929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0
+scriptPubKey        = 5120272cebd048ae9c5f920ddc5a09f11183251ae10c148310cc97184d04d5ef4d1b
+address             = bc1pyukwh5zg46w9lysdm3dqnug3svj34cgvzjp3pnyhrpxsf400f5dsua3ctn
+
+// Note the certificate and endpoint signing test vectors above for Version 1/Version 2 use a certificate
+// keypair independent of the fidelity bond derivation path, so a Version 3 endpoint signature (using that
+// same certificate keypair) would likewise be identical to the ones already shown above.
 </pre>
+
+The Version 3 output keys and addresses above were independently cross-checked outside this BIP's own reference derivation code, using [[bip-0341.mediawiki|BIP341]]'s own published <tt>scriptPubKey</tt> test vectors as ground truth, to confirm that the internal-key tweak and bech32m address encoding used here match BIP341's specification.
 
 Code generating the Version 1 test vectors can be found here: https://github.com/chris-belcher/timelocked-addresses-fidelity-bond-bip-testvectors
 
@@ -347,6 +475,10 @@ The unsigned PSBT, sighash preimages, and final transactions above were cross-ch
 * [[bip-0084.mediawiki|BIP84 - Derivation scheme for P2WPKH based accounts]]
 * [[bip-0086.mediawiki|BIP86 - Key Derivation for Single Key P2TR Outputs]]
 * [[bip-0174.mediawiki|BIP174 - Partially Signed Bitcoin Transaction Format]]
+* [[bip-0340.mediawiki|BIP340 - Schnorr Signatures for secp256k1]]
+* [[bip-0341.mediawiki|BIP341 - Taproot: SegWit version 1 spending rules]]
+* [[bip-0342.mediawiki|BIP342 - Validation of Taproot Scripts]]
+* [[bip-0350.mediawiki|BIP350 - Bech32m format for v1+ witness addresses]]
 * [[bip-0379.md|BIP379 - Miniscript]]
 * [[bip-0388.mediawiki|BIP388 - Wallet Policies for Descriptor Wallets]]
 
@@ -358,6 +490,8 @@ Thanks to m0wer for review feedback on the Version 2 revision, which shaped the 
 
 To help implementers understand updates to this document, a version number resembling ''semantic versioning'' (<tt>MAJOR.MINOR.PATCH</tt>) is used, as described in [[bip-0003.md|BIP 3]]. The <tt>MAJOR</tt> version is incremented for changes incompatible with prior versions, <tt>MINOR</tt> for backward-compatible additions or extensions, and <tt>PATCH</tt> for other noteworthy changes (bug fixes, test vectors, clarifications, etc.).
 
+* '''3.0.0''' (2026-09-25):
+** Add the Version 3 derivation scheme, a Taproot variant of Version 2: same <tt>purpose'</tt> (<tt>m/46'</tt>) but its own <tt>change</tt> value (<tt>m/46'/0'/0'/1/index</tt>), locking funds to a BIP341 Taproot output with the BIP341 NUMS point as internal key (no key path) and Version 2's script template as the sole tapscript leaf, using <tt>x(derived_key)</tt> in place of the compressed key; add corresponding test vectors, cross-checked against BIP341's own published test vectors, and update Abstract, Backwards Compatibility, Rationale, Public key derivation, Address derivation, Message signing and Reference accordingly.
 * '''2.0.0''' (2026-08-11):
 ** Add the Version 2 derivation scheme with a dedicated <tt>purpose'</tt> field (<tt>m/46'</tt>), <tt>change</tt> set to the conventional external-chain value <tt>0</tt> (<tt>m/46'/0'/0'/0/index</tt>), and a Miniscript-compatible <tt>witness script</tt>, alongside the existing Version 1 scheme (<tt>m/84'/0'/0'/2/index</tt>); add corresponding test vectors and update Rationale and Backwards Compatibility accordingly. Require Version 2 certificate messages to encode <tt>cert_pubkey</tt> as lowercase hex instead of raw bytes, for pure-ASCII hardware wallet compatibility; spell out the exact message-signing preimage, hashing, and signature encoding; add a caveat that generic Miniscript support does not by itself cover every Version 2 bond due to per-bond timelocks; add a worked PSBT v0 example (mature-spend and pre-locktime-failure); note and defer an open question about binding certificates to a specific bond script and network. Feedback from m0wer.
 * '''1.0.0''' (2024-05-23):
